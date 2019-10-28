@@ -10,6 +10,7 @@
 
 namespace xPDO\Om;
 
+use SimpleXMLElement;
 use xPDO\Reflect\xPDOReflectionClass;
 use xPDO\xPDO;
 
@@ -84,7 +85,7 @@ abstract class xPDOGenerator {
      */
     public $map= array ();
     /**
-     * @var \SimpleXMLElement
+     * @var SimpleXMLElement
      */
     public $schema= null;
 
@@ -231,16 +232,16 @@ abstract class xPDOGenerator {
             return false;
         }
 
-        $this->schema = new \SimpleXMLElement($schemaFile, 0, true);
+        $this->schema = new SimpleXMLElement($schemaFile, 0, true);
         if (isset($this->schema)) {
             foreach ($this->schema->attributes() as $attributeKey => $attribute) {
-                /** @var \SimpleXMLElement $attribute */
+                /** @var SimpleXMLElement $attribute */
                 $this->model[$attributeKey] = (string) $attribute;
             }
             $this->model['namespace'] = trim($this->model['package'], '\\');
             if (isset($this->schema->object)) {
                 foreach ($this->schema->object as $object) {
-                    /** @var \SimpleXMLElement $object */
+                    /** @var SimpleXMLElement $object */
                     $class = (string) $object['class'];
                     $extends = isset($object['extends']) ? (string) $object['extends'] : $this->model['baseClass'];
                     $this->classes[$class] = array('extends' => $extends);
@@ -388,7 +389,7 @@ abstract class xPDOGenerator {
                             }
                             if (!empty($compositeNode)) {
                                 if (isset($composite->criteria)) {
-                                    /** @var \SimpleXMLElement $criteria */
+                                    /** @var SimpleXMLElement $criteria */
                                     foreach ($composite->criteria as $criteria) {
                                         $criteriaTarget = (string) $criteria['target'];
                                         $expression = (string) $criteria;
@@ -425,7 +426,7 @@ abstract class xPDOGenerator {
                             }
                             if (!empty($aggregateNode)) {
                                 if (isset($aggregate->criteria)) {
-                                    /** @var \SimpleXMLElement $criteria */
+                                    /** @var SimpleXMLElement $criteria */
                                     foreach ($aggregate->criteria as $criteria) {
                                         $criteriaTarget = (string) $criteria['target'];
                                         $expression = (string) $criteria;
@@ -488,7 +489,7 @@ abstract class xPDOGenerator {
         $this->outputMeta($path, $namespacePrefix);
         $this->outputClasses($path, $update, $regenerate, $namespacePrefix);
         if ($compile) {
-            $this->compile($path, $this->model, $this->classes, $this->map);
+            $this->compile($path);
         }
         $this->_reset();
         return true;
@@ -698,9 +699,10 @@ EOD;
         $template= <<<'EOD'
 [+class-header+]
 [+class-declaration+]
-[+class-traits+][+class-constants+][+class-properties+]
+[+class-traits+][+class-constants+]
     public static $metaMap = [+map+];
-[+class-methods+][+class-close-declaration+][+class-footer+]
+
+[+class-properties+][+class-methods+][+class-close-declaration+][+class-footer+]
 EOD;
         return $template;
     }
@@ -757,7 +759,7 @@ EOD;
             $classFooter = trim($reflector->getSource(null, $reflector->getEndLine(), null, false), " \n\r\t");
             if (!empty($classFooter)) $classFooter = rtrim($classFooter, "\n");
 
-            $interfaces = $reflector->getInterfaceNames();
+            $interfaces = $reflector->getLocalInterfaceNames();
             if (!empty($interfaces)) {
                 $interfaces = " implements " . implode(', ', $interfaces);
             } else {
@@ -768,20 +770,19 @@ EOD;
 
             $properties = array_filter($reflector->getProperties(), function($property) use ($class) {
                 /* @var \ReflectionProperty $property */
-                return $property->getDeclaringClass() === ltrim($class, '\\');
+                return $property->getName() !== 'metaMap' && $property->getDeclaringClass()->getName() === ltrim($class, '\\');
             });
             $methods = array_filter($reflector->getMethods(), function($method) use ($class) {
                 /* @var \ReflectionMethod $method */
-                return $method->getDeclaringClass() === ltrim($class, '\\');
+                return $method->getDeclaringClass()->getName() === ltrim($class, '\\');
             });
 
             $traitArray = array();
             if (version_compare(PHP_VERSION, '5.4', '>=')) {
-                $traits = $reflector->getTraits();
+                $traits = $reflector->getTraitNames();
 
-                /* @var \ReflectionClass $trait */
                 foreach ($traits as $trait) {
-                    $traitArray[] = "    use \\{$trait->getName()};";
+                    $traitArray[] = "    use \\{$trait};";
                 }
             }
 
@@ -804,11 +805,20 @@ EOD;
 
             $meta['class-header'] = "{$classHeader}\n";
             $meta['class-declaration'] = "class {$reflector->getShortName()} extends \\{$reflector->getParentClass()->getName()}{$interfaces}\n{";
-            $meta['class-constants'] = implode("\n", $constantsArray);
             if (version_compare(PHP_VERSION, '5.4', '>=')) {
                 $meta['class-traits'] = implode("\n", $traitArray);
+                if (!empty($meta['class-traits'])) {
+                    $meta['class-traits'] .= "\n";
+                }
+            }
+            $meta['class-constants'] = implode("\n", $constantsArray);
+            if (!empty($meta['class-constants'])) {
+                $meta['class-constants'] .= "\n";
             }
             $meta['class-properties'] = implode("\n", $propertyArray);
+            if (!empty($meta['class-properties'])) {
+                $meta['class-properties'] .= "\n";
+            }
             $meta['class-methods'] = implode("\n", $methodArray);
             $meta['class-close-declaration'] = "}\n";
             $meta['class-footer'] = $classFooter;
@@ -823,9 +833,18 @@ EOD;
         $meta['class-traits'] = '';
         if (version_compare(PHP_VERSION, '5.4', '>=')) {
             $meta['class-traits'] = implode("\n", $this->_constructClassTraits($class, $meta));
+            if (!empty($meta['class-traits'])) {
+                $meta['class-traits'] .= "\n";
+            }
         }
         $meta['class-constants'] = implode("\n", $this->_constructClassConstants($class, $meta));
+        if (!empty($meta['class-constants'])) {
+            $meta['class-constants'] .= "\n";
+        }
         $meta['class-properties'] = implode("\n", $this->_constructClassProperties($class, $meta));
+        if (!empty($meta['class-properties'])) {
+            $meta['class-properties'] .= "\n";
+        }
         $meta['class-methods'] = implode("\n", $this->_constructClassMethods($class, $meta));
         $meta['class-close-declaration'] = "}\n";
         $meta['class-footer'] = $this->_constructClassFooter($class, $meta);
